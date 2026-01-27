@@ -4,42 +4,42 @@ local uv = vim.uv or vim.loop
 ---@param on_exit fun(id: integer, code: integer, eventtype: "exit")
 ---@return integer channel
 local function run_sudo_in_floating_terminal(cmd, on_exit)
-	-- 1. Create a buffer for the terminal
-	local buf = vim.api.nvim_create_buf(false, true)
+  -- 1. Create a buffer for the terminal
+  local buf = vim.api.nvim_create_buf(false, true)
 
-	local width = math.floor(vim.o.columns * 0.4)
-	local height = math.floor(vim.o.lines * 0.2)
-	local row = math.floor((vim.o.lines - height) / 1.5)
-	local col = math.floor((vim.o.columns - width) / 2)
+  local width = math.floor(vim.o.columns * 0.4)
+  local height = math.floor(vim.o.lines * 0.2)
+  local row = math.floor((vim.o.lines - height) / 1.2)
+  local col = math.floor((vim.o.columns - width) / 5)
 
-	local terminal_winid = vim.api.nvim_open_win(buf, true, {
-		relative = "editor",
-		width = width,
-		height = height,
-		row = row,
-		col = col,
-		style = "minimal",
-	})
+  local terminal_winid = vim.api.nvim_open_win(buf, true, {
+    relative = "editor",
+    width = width,
+    height = height,
+    row = row,
+    col = col,
+    style = "minimal",
+  })
 
-	local full_command = { "sudo", "-S", unpack(cmd) }
+  local full_command = { "sudo", unpack(cmd) }
 
-	local jobid = vim.fn.jobstart(full_command, {
-		term = true,
-		stdin = "pipe",
-		on_exit = on_exit,
-	})
-	vim.api.nvim_create_autocmd("WinClosed", {
-		callback = function(args)
-			local winid = args.file
-			if winid ~= terminal_winid then
-				return false
-			end
-			vim.fn.jobstop(jobid)
-		end,
-	})
+  local jobid = vim.fn.jobstart(full_command, {
+    term = true,
+    stdin = "pipe",
+    on_exit = on_exit,
+  })
+  vim.api.nvim_create_autocmd("WinClosed", {
+    callback = function(args)
+      local winid = args.file
+      if winid ~= terminal_winid then
+        return false
+      end
+      vim.fn.jobstop(jobid)
+    end,
+  })
 
-	vim.cmd("startinsert")
-	return jobid
+  vim.cmd("startinsert")
+  return jobid
 end
 
 local open_perm = tonumber("666", 8)
@@ -48,21 +48,21 @@ local open_perm = tonumber("666", 8)
 --- @return string? filename The path to the temp file, or nil on error
 --- @return string? error
 local function write_to_temp(content)
-	local temp_path = vim.fn.tempname()
+  local temp_path = vim.fn.tempname()
 
-	local fd = uv.fs_open(temp_path, "w", open_perm) -- 438 is octal 0666
-	if not fd then
-		vim.notify("Could not open temp file for writing", vim.log.levels.ERROR)
-		return nil
-	end
+  local fd = uv.fs_open(temp_path, "w", open_perm) -- 438 is octal 0666
+  if not fd then
+    vim.notify("Could not open temp file for writing", vim.log.levels.ERROR)
+    return nil
+  end
 
-	local bytes = #content
-	local bytes_written = assert(uv.fs_write(fd, content))
-	assert(bytes_written == bytes)
+  local bytes = #content
+  local bytes_written = assert(uv.fs_write(fd, content))
+  assert(bytes_written == bytes)
 
-	uv.fs_close(fd)
+  uv.fs_close(fd)
 
-	return temp_path
+  return temp_path
 end
 
 local move_tmp_to_dest_and_cp_attributes = [[
@@ -77,52 +77,77 @@ else
 fi
 ]]
 vim.api.nvim_create_user_command("SuWrite", function(args)
-	local buf = vim.api.nvim_get_current_buf()
-	if vim.bo[buf].buftype ~= "" then
-		return
-	end
-	local bufname = vim.api.nvim_buf_get_name(buf)
-	local filename = #args.nargs > 0 and args.fargs[1] or bufname
-	local stat = uv.fs_stat(filename)
-	if stat and uv.fs_access(filename, "w") then
-		vim.notify("File is already writable, use :w", vim.log.levels.WARN)
-		return
-	end
+  local buf = vim.api.nvim_get_current_buf()
+  if vim.bo[buf].buftype ~= "" then
+    return
+  end
+  local bufname = vim.api.nvim_buf_get_name(buf)
+  local filename = #args.nargs > 0 and args.fargs[1] or bufname
+  local stat = uv.fs_stat(filename)
+  if stat and uv.fs_access(filename, "w") then
+    vim.notify("File is already writable, use :w", vim.log.levels.WARN)
+    return
+  end
 
-	-- 2. If file doesn't exist, check if parent directory is searchable/writable
-	if not stat then
-		local parent_dir = vim.fn.fnamemodify(filename, ":h")
-		if not (uv.fs_access(parent_dir, "w") and uv.fs_access(parent_dir, "x")) then
-			vim.notify("Parent directory not writable. Sudo cannot create file here.", vim.log.levels.ERROR)
-			return
-		end
-	end
+  -- 2. If file doesn't exist, check if parent directory is searchable/writable
+  if not stat then
+    local parent_dir = vim.fn.fnamemodify(filename, ":h")
+    if not (uv.fs_access(parent_dir, "w") and uv.fs_access(parent_dir, "x")) then
+      vim.notify(
+        "Parent directory not writable. Sudo cannot create file here.",
+        vim.log.levels.ERROR
+      )
+      return
+    end
+  end
 
-	-- 3. Prepare content and temp file
-	local lines = vim.api.nvim_buf_get_lines(buf, args.line1, args.line2, false)
-	local content = table.concat(lines, "\n") .. "\n"
-	local temp_filename = assert(write_to_temp(content))
+  -- 3. Prepare content and temp file
+  local lines = vim.api.nvim_buf_get_lines(buf, args.line1 - 1, args.line2, false)
+  local content = table.concat(lines, "\n") .. "\n"
+  local temp_filename = assert(write_to_temp(content))
 
-	vim.notify("Executing sudo write...", vim.log.levels.INFO)
+  vim.notify("Executing sudo write...", vim.log.levels.INFO)
 
-	run_sudo_in_floating_terminal({
-		"sh",
-		"-c",
-		move_tmp_to_dest_and_cp_attributes:format(vim.fn.shellescape(filename), vim.fn.shellescape(temp_filename)),
-	}, function(id, code, event)
-		-- Clean up the temp file regardless of success
-		os.remove(temp_filename)
+  run_sudo_in_floating_terminal({
+    "sh",
+    "-c",
+    move_tmp_to_dest_and_cp_attributes:format(
+      vim.fn.shellescape(filename),
+      vim.fn.shellescape(temp_filename)
+    ),
+  }, function(id, code, event)
+    if code ~= 0 then
+      vim.schedule(function()
+        vim.notify("Sudo write failed with code " .. code, vim.log.levels.ERROR)
+        local edit_temp = "Edit temp file w/ contents"
+        local abort_temp = "Abort write attempt and remove temp file"
+        vim.ui.select({ edit_temp, abort_temp }, {
+          prompt = "Sudo write failed (code" .. code .. "), choose option:",
+        }, function(choice)
+          if not choice then
+            vim.notify(
+              "No choice made, will do nothing. Temp file w/ contents is at " .. temp_filename
+            )
+            return
+          end
+          if choice == edit_temp then
+            vim.cmd.edit(temp_filename)
+          elseif choice == abort_temp then
+            os.remove(temp_filename)
+          else
+            error("Not implemented")
+          end
+        end)
+      end)
+      return
+    end
 
-		if code ~= 0 then
-			vim.schedule(function()
-				vim.notify("Sudo write failed with code " .. code, vim.log.levels.ERROR)
-			end)
-		end
-
-		vim.schedule(function()
-			vim.notify("File successfully written!", vim.log.levels.INFO)
-			vim.cmd("checktime " .. buf)
-			vim.bo[buf].modified = false
-		end)
-	end)
+    vim.schedule(function()
+      vim.notify("File successfully written!", vim.log.levels.INFO)
+      -- Clean up the temp file
+      os.remove(temp_filename)
+      vim.cmd("checktime " .. buf)
+      vim.bo[buf].modified = false
+    end)
+  end)
 end, { range = "%", complete = "file", nargs = "?" })
