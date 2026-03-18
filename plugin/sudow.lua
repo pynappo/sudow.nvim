@@ -42,7 +42,6 @@ local function run_sudo_in_floating_terminal(cmd, on_exit)
   return jobid
 end
 
-local open_perm = tonumber("666", 8)
 --- Writes a buffer's content to a temporary file
 --- @param content string|string[]
 --- @return string? filename The path to the temp file, or nil on error
@@ -50,6 +49,7 @@ local open_perm = tonumber("666", 8)
 local function write_to_temp(content)
   local temp_path = vim.fn.tempname()
 
+  local open_perm = tonumber("666", 8)
   local fd = uv.fs_open(temp_path, "w", open_perm) -- 438 is octal 0666
   if not fd then
     vim.notify("Could not open temp file for writing", vim.log.levels.ERROR)
@@ -65,7 +65,8 @@ local function write_to_temp(content)
   return temp_path
 end
 
-local move_tmp_to_dest_and_cp_attributes = [[
+local posix_templates = {
+  move_tmp_to_dest_and_cp_attributes = [[
 NVIM_SUWRITE_ORIGINAL=%s
 NVIM_SUWRITE_TEMP=%s
 if [ -f "$NVIM_SUWRITE_ORIGINAL" ]; then
@@ -75,7 +76,8 @@ else
 		# New file: move directly (sudo will own it)
 		mv -f "$NVIM_SUWRITE_TEMP" "$NVIM_SUWRITE_ORIGINAL"
 fi
-]]
+]],
+}
 vim.api.nvim_create_user_command("SuWrite", function(args)
   local buf = vim.api.nvim_get_current_buf()
   if vim.bo[buf].buftype ~= "" then
@@ -84,24 +86,13 @@ vim.api.nvim_create_user_command("SuWrite", function(args)
   local bufname = vim.api.nvim_buf_get_name(buf)
   local filename = #args.nargs > 0 and args.fargs[1] or bufname
   local stat = uv.fs_stat(filename)
-  if stat and uv.fs_access(filename, "w") then
+  local parent_dir = vim.fs.dirname(filename)
+  if stat then
     vim.notify("File is already writable, use :w", vim.log.levels.WARN)
     return
   end
 
-  -- 2. If file doesn't exist, check if parent directory is searchable/writable
-  if not stat then
-    local parent_dir = vim.fn.fnamemodify(filename, ":h")
-    if not (uv.fs_access(parent_dir, "w") and uv.fs_access(parent_dir, "x")) then
-      vim.notify(
-        "Parent directory not writable. Sudo cannot create file here.",
-        vim.log.levels.ERROR
-      )
-      return
-    end
-  end
-
-  -- 3. Prepare content and temp file
+  -- Prepare content and temp file
   local lines = vim.api.nvim_buf_get_lines(buf, args.line1 - 1, args.line2, false)
   local content = table.concat(lines, "\n") .. "\n"
   local temp_filename = assert(write_to_temp(content))
@@ -111,7 +102,7 @@ vim.api.nvim_create_user_command("SuWrite", function(args)
   run_sudo_in_floating_terminal({
     "sh",
     "-c",
-    move_tmp_to_dest_and_cp_attributes:format(
+    posix_templates.move_tmp_to_dest_and_cp_attributes:format(
       vim.fn.shellescape(filename),
       vim.fn.shellescape(temp_filename)
     ),
