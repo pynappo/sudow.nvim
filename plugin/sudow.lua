@@ -14,10 +14,10 @@ local function run_sudo_in_floating_terminal(cmd, on_exit)
 
   local terminal_winid = vim.api.nvim_open_win(buf, true, {
     relative = "editor",
-    width = width,
-    height = height,
-    row = row,
-    col = col,
+    width = 0.2,
+    height = 0.2,
+    row = 0.2,
+    col = 0.2,
     style = "minimal",
   })
 
@@ -86,8 +86,7 @@ vim.api.nvim_create_user_command("SuWrite", function(args)
   local bufname = vim.api.nvim_buf_get_name(buf)
   local filename = #args.nargs > 0 and args.fargs[1] or bufname
   local stat = uv.fs_stat(filename)
-  local parent_dir = vim.fs.dirname(filename)
-  if stat then
+  if stat and uv.fs_access(filename, "w") then
     vim.notify("File is already writable, use :w", vim.log.levels.WARN)
     return
   end
