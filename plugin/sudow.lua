@@ -7,15 +7,10 @@ local function run_sudo_in_floating_terminal(cmd, on_exit)
   -- 1. Create a buffer for the terminal
   local buf = vim.api.nvim_create_buf(false, true)
 
-  local width = math.floor(vim.o.columns * 0.4)
-  local height = math.floor(vim.o.lines * 0.2)
-  local row = math.floor((vim.o.lines - height) / 1.2)
-  local col = math.floor((vim.o.columns - width) / 5)
-
   local terminal_winid = vim.api.nvim_open_win(buf, true, {
     relative = "editor",
-    width = 0.2,
-    height = 0.2,
+    width = math.floor(vim.o.columns * 0.4),
+    height = math.floor(vim.o.lines * 0.2),
     row = 0.2,
     col = 0.2,
     style = "minimal",
@@ -69,12 +64,14 @@ local posix_templates = {
   move_tmp_to_dest_and_cp_attributes = [[
 NVIM_SUWRITE_ORIGINAL=%s
 NVIM_SUWRITE_TEMP=%s
+NVIM_SUWRITE_UID=%s
 if [ -f "$NVIM_SUWRITE_ORIGINAL" ]; then
 		# File exists: clone attributes then overwrite
 		cp -p --attributes-only "$NVIM_SUWRITE_ORIGINAL" "$NVIM_SUWRITE_TEMP" && mv -f "$NVIM_SUWRITE_TEMP" "$NVIM_SUWRITE_ORIGINAL"
 else
 		# New file: move directly (sudo will own it)
 		mv -f "$NVIM_SUWRITE_TEMP" "$NVIM_SUWRITE_ORIGINAL"
+    chown +"$NVIM_SUWRITE_UID" "$NVIM_SUWRITE_ORIGINAL"
 fi
 ]],
 }
@@ -91,6 +88,13 @@ vim.api.nvim_create_user_command("SuWrite", function(args)
     return
   end
 
+  local save_as_uid = stat and stat.uid or 0
+
+  if uv.fs_access(vim.fs.dirname(filename), "w") then
+    vim.notify("Directory is already writable", vim.log.levels.WARN)
+    return
+  end
+
   -- Prepare content and temp file
   local lines = vim.api.nvim_buf_get_lines(buf, args.line1 - 1, args.line2, false)
   local content = table.concat(lines, "\n") .. "\n"
@@ -103,7 +107,8 @@ vim.api.nvim_create_user_command("SuWrite", function(args)
     "-c",
     posix_templates.move_tmp_to_dest_and_cp_attributes:format(
       vim.fn.shellescape(filename),
-      vim.fn.shellescape(temp_filename)
+      vim.fn.shellescape(temp_filename),
+      vim.fn.shellescape(tostring(save_as_uid))
     ),
   }, function(id, code, event)
     if code ~= 0 then
